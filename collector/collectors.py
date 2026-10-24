@@ -22,6 +22,26 @@ def _ms_from_iso(value: str) -> int:
     return int(parsed.timestamp() * 1000)
 
 
+def _now_ms() -> int:
+    return int(datetime.now(timezone.utc).timestamp() * 1000)
+
+
+def _parse_rss_datetime(value: str) -> str:
+    """Normalize RSS dates to UTC, including dates with the unknown -0000 offset.
+
+    ``email.utils`` returns a naive datetime for ``-0000``.  Treating that
+    naive value with the machine's local timezone would shift it by UTC+7 on
+    the developer machine, so the pipeline convention is to interpret it as
+    UTC explicitly.
+    """
+    parsed = parsedate_to_datetime(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed.isoformat().replace("+00:00", "Z")
+
+
 def _get(url: str, *, timeout: int, params: dict[str, object] | None = None,
          headers: dict[str, str] | None = None, attempts: int = 3) -> requests.Response:
     last_error: Exception | None = None
@@ -53,6 +73,7 @@ class BinanceCollector:
             timeout=self.timeout,
         )
         rows = response.json()
+        now_ms = _now_ms()
         return [
             MarketRecord(
                 data_type="market",
@@ -71,6 +92,7 @@ class BinanceCollector:
                 collected_at=utc_now(),
             )
             for row in rows
+            if int(row[6]) < now_ms
         ]
 
     def collect_klines_range(
@@ -84,6 +106,7 @@ class BinanceCollector:
 
         records: list[MarketRecord] = []
         cursor_ms = start_ms
+        now_ms = _now_ms()
         while cursor_ms < end_ms:
             response = _get(
                 f"{self.base_url}/fapi/v1/klines",
@@ -109,7 +132,7 @@ class BinanceCollector:
                     collected_at=utc_now(),
                 )
                 for row in rows
-                if start_ms <= row[0] < end_ms
+                if start_ms <= row[0] < end_ms and int(row[6]) < now_ms
             ]
             records.extend(page)
             last_open_ms = int(rows[-1][0])
@@ -140,7 +163,7 @@ class CoinDeskCollector:
             if not title or not url or not published:
                 LOGGER.warning("Skipping news item with missing title/url/pubDate")
                 continue
-            published_at = parsedate_to_datetime(published).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            published_at = _parse_rss_datetime(published)
             article_id = hashlib.sha256(url.encode("utf-8")).hexdigest()[:24]
             records.append(NewsRecord(
                 data_type="news", source="coindesk", article_id=article_id,
