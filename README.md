@@ -14,6 +14,8 @@ python -m collector --source all --once
 
 File được chia theo ngày, ví dụ `data/samples/market/2026/10/22.jsonl` và `data/samples/news/2026/10/22.jsonl`.
 
+Bỏ `--once` để collector chạy liên tục, mỗi `COLLECTOR_POLL_SECONDS` giây (mặc định 60) lấy một lượt; dừng bằng Ctrl+C.
+
 ## Gửi Kafka
 
 ```powershell
@@ -28,16 +30,21 @@ Thời gian dùng UTC. Khoảng lấy dữ liệu là `[start, end)`, tức có 
 python -m collector --source market --start 2026-10-15T00:00:00Z --end 2026-10-22T00:00:00Z
 ```
 
-Với 2 symbol và nến `1m`, lệnh trên dự kiến tạo khoảng 20.160 record market. Collector tự phân trang Binance, ghi file theo ngày và bỏ qua record đã tồn tại nếu chạy lại.
+Với 2 symbol và nến `1m`, lệnh trên dự kiến tạo khoảng 20.160 record market. Collector tự phân trang Binance (`BINANCE_HISTORY_LIMIT` nến mỗi request, tối đa 1500), ghi file theo ngày và bỏ qua record đã tồn tại nếu chạy lại.
+
+CoinDesk RSS chỉ chứa các bài mới nhất, nên `--start/--end` với nguồn news chỉ lọc trong danh sách đó, không lấy được tin cũ.
 
 ## Quy tắc chuẩn hóa
 
-- Timestamp dùng ISO-8601 UTC với hậu tố `Z`.
+- Timestamp dùng ISO-8601 UTC, độ chính xác mili giây, hậu tố `Z`, ví dụ `2026-10-22T08:00:00.000Z`.
+- Chỉ lưu nến đã đóng (`close_time` trước thời điểm lấy); nến đang chạy bị bỏ qua và được lấy ở lượt sau.
 - Bản ghi giá duy nhất theo `source + symbol + interval + open_time`.
 - Bản ghi tin tức duy nhất theo `source + article_id`; `article_id` là hash của URL.
-- Bản ghi thiếu trường, sai kiểu, giá không hợp lệ hoặc volume âm bị loại và ghi log.
+- Bản ghi thiếu trường, sai kiểu, giá không dương, giá trị NaN/vô hạn, volume hoặc `trade_count` âm bị loại và ghi log.
 - `published_at` là thời gian bài viết; `collected_at` là thời gian collector lấy dữ liệu.
+- Tin tức được gắn `symbols` theo từ khóa trong tiêu đề/tóm tắt (ví dụ "bitcoin" → `BTCUSDT`); HTML trong tóm tắt được loại bỏ.
 - Các lần chạy sau append vào file ngày tương ứng và bỏ qua bản ghi đã tồn tại.
+- Với `--send-kafka`, chỉ bản ghi mới ghi vào file được gửi Kafka, nên chạy lại không gửi trùng.
 
 ## Kiểm thử
 

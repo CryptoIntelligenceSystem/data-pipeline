@@ -53,16 +53,17 @@ def _record_date(record: dict[str, Any], data_type: str) -> str:
 
 def write_partitioned_jsonl(
     records: Iterable[dict[str, Any]], base_dir: str | Path, data_type: str
-) -> tuple[int, int]:
+) -> tuple[list[dict[str, Any]], int]:
     """Append records to data_type/year/month/day.jsonl without duplicates.
 
-    Returns (written_count, skipped_existing_count). Existing lines are preserved.
+    Returns (written_records, skipped_existing_count). Existing lines are preserved, and only
+    the returned records are new, so they are the ones safe to forward downstream.
     """
     grouped: dict[str, list[dict[str, Any]]] = {}
     for record in records:
         grouped.setdefault(_record_date(record, data_type), []).append(record)
 
-    written = 0
+    written: list[dict[str, Any]] = []
     skipped = 0
     for day, day_records in grouped.items():
         year, month, day_number = day.split("-")
@@ -87,5 +88,5 @@ def write_partitioned_jsonl(
                     continue
                 file.write(json.dumps(record, ensure_ascii=False) + "\n")
                 existing_keys.add(key)
-                written += 1
+                written.append(record)
     return written, skipped

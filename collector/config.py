@@ -16,6 +16,9 @@ class Settings:
     symbols: tuple[str, ...] = _csv("BINANCE_SYMBOLS", "BTCUSDT,ETHUSDT")
     interval: str = os.getenv("BINANCE_INTERVAL", "1m")
     limit: int = int(os.getenv("BINANCE_LIMIT", "100"))
+    # Binance allows up to 1500 klines per request; larger pages mean far fewer requests for history.
+    history_limit: int = int(os.getenv("BINANCE_HISTORY_LIMIT", "1000"))
+    poll_seconds: int = int(os.getenv("COLLECTOR_POLL_SECONDS", "60"))
     coindesk_rss_url: str = os.getenv("COINDESK_RSS_URL", "https://www.coindesk.com/arc/outboundfeeds/rss/")
     kafka_bootstrap_servers: str = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     market_topic: str = os.getenv("KAFKA_MARKET_TOPIC", "market_data")

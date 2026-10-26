@@ -3,8 +3,15 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+def to_iso(value: datetime) -> str:
+    """Format a datetime as ISO-8601 UTC with millisecond precision and a Z suffix."""
+    if value.tzinfo is None:
+        raise ValueError("datetime must include a timezone")
+    return value.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return to_iso(datetime.now(timezone.utc))
 
 
 @dataclass(frozen=True)
