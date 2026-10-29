@@ -1,0 +1,6 @@
+# Spark jobs (spark_jobs/) and their tests. pyspark MUST equal the Spark version of the
+# infrastructure image (infrastructure/spark/Dockerfile: SPARK_VERSION=3.5.9).
+# Spark 3.5 supports Java 8/11/17: run the tests with JDK 17 (JAVA_HOME), not 21.
+pyspark==3.5.9
+jsonschema>=4.23,<5
+pytest>=8,<9
