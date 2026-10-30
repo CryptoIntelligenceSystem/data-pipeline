@@ -29,7 +29,7 @@ shift
 script="/opt/pipeline/spark_jobs/jobs/${job}.py"
 
 env_args=()
-for var in $(compgen -e | grep -E '^(SPARK_(STARTING_OFFSETS|TRIGGER_INTERVAL|MAX_OFFSETS_PER_TRIGGER|FAIL_ON_DATA_LOSS)|ANOMALY_|(RAW_TO_MINIO|MARKET_TO_CLICKHOUSE|VOLUME_ANOMALY)_)' || true); do
+for var in $(compgen -e | grep -E '^(SPARK_(STARTING_OFFSETS|TRIGGER_INTERVAL|MAX_OFFSETS_PER_TRIGGER|FAIL_ON_DATA_LOSS)|ANOMALY_|(RAW_TO_MINIO|MARKET_TO_CLICKHOUSE|NEWS_TO_CLICKHOUSE|VOLUME_ANOMALY)_)' || true); do
   env_args+=(-e "${var}=${!var}")
 done
 
