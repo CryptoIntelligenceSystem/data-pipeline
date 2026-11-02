@@ -4,10 +4,11 @@ from pyspark.sql import Column, DataFrame, Window
 from pyspark.sql import functions as F
 
 from .common import contracts
-from .common.validate import is_valid, validate_market
+from .common.validate import is_valid, validate_market, validate_news
 
 KAFKA_COLUMNS = ("topic", "partition", "offset", "timestamp", "key", "value")
 MARKET_FIELDS = tuple(contracts.properties("market_kline"))
+NEWS_FIELDS = tuple(contracts.properties("news_article"))
 
 
 def _iso(column: Column) -> Column:
@@ -73,6 +74,40 @@ def market_rows(valid: DataFrame) -> DataFrame:
 
 def reject_rows(rejected: DataFrame) -> DataFrame:
     """Columns of pipeline.market_data_rejects."""
+    return rejected.select(
+        "topic",
+        F.col("partition").cast("int").alias("partition"),
+        "offset",
+        F.col("timestamp").alias("kafka_timestamp"),
+        "key",
+        F.col("value").alias("raw_value"),
+        F.array_join("errors", "; ").alias("errors"),
+        F.current_timestamp().alias("rejected_at"),
+    )
+
+
+def split_news(kafka_rows: DataFrame) -> tuple[DataFrame, DataFrame]:
+    """Validate decoded Kafka news rows (string key/value): (valid, rejected)."""
+    checked = validate_news(kafka_rows)
+    return checked.where(is_valid()), checked.where(~is_valid())
+
+
+def dedupe_news(articles: DataFrame) -> DataFrame:
+    """Keep the newest copy of each news article by its natural key."""
+    order = [F.col("collected_at").desc()]
+    if "offset" in articles.columns:
+        order.append(F.col("offset").desc())
+    window = Window.partitionBy("source", "article_id").orderBy(*order)
+    return articles.withColumn("_rn", F.row_number().over(window)).where("_rn = 1").drop("_rn")
+
+
+def news_rows(valid: DataFrame) -> DataFrame:
+    """Columns of pipeline.news_data, without Kafka-only metadata or validation columns."""
+    return dedupe_news(valid).select(*NEWS_FIELDS)
+
+
+def news_reject_rows(rejected: DataFrame) -> DataFrame:
+    """Columns of pipeline.news_data_rejects."""
     return rejected.select(
         "topic",
         F.col("partition").cast("int").alias("partition"),

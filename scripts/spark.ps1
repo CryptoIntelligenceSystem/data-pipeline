@@ -29,7 +29,7 @@ if ($Action -eq "test") {
 }
 if (-not $Job) { throw "job name required, e.g. market_to_clickhouse" }
 
-$pattern = '^(SPARK_(STARTING_OFFSETS|TRIGGER_INTERVAL|MAX_OFFSETS_PER_TRIGGER|FAIL_ON_DATA_LOSS)|ANOMALY_|(RAW_TO_MINIO|MARKET_TO_CLICKHOUSE|VOLUME_ANOMALY)_)'
+$pattern = '^(SPARK_(STARTING_OFFSETS|TRIGGER_INTERVAL|MAX_OFFSETS_PER_TRIGGER|FAIL_ON_DATA_LOSS)|ANOMALY_|(RAW_TO_MINIO|MARKET_TO_CLICKHOUSE|NEWS_TO_CLICKHOUSE|VOLUME_ANOMALY)_)'
 $envArgs = @()
 Get-ChildItem env: | Where-Object { $_.Name -match $pattern } | ForEach-Object { $envArgs += @("-e", "$($_.Name)=$($_.Value)") }
 

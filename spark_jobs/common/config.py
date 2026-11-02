@@ -31,6 +31,8 @@ class Settings:
     raw_bucket: str
     checkpoint_bucket: str
     clickhouse_jdbc_url: str
+    clickhouse_http_url: str
+    clickhouse_database: str
     clickhouse_jdbc_driver: str
     clickhouse_user: str
     clickhouse_password: str
@@ -47,6 +49,8 @@ class Settings:
             raw_bucket=os.getenv("MINIO_RAW_BUCKET", "raw-data"),
             checkpoint_bucket=os.getenv("MINIO_CHECKPOINT_BUCKET", "checkpoints"),
             clickhouse_jdbc_url=_required("CLICKHOUSE_JDBC_URL"),
+            clickhouse_http_url=os.getenv("CLICKHOUSE_HTTP_URL", "http://clickhouse:8123"),
+            clickhouse_database=os.getenv("CLICKHOUSE_DB", "pipeline"),
             clickhouse_jdbc_driver=os.getenv("CLICKHOUSE_JDBC_DRIVER", "com.clickhouse.jdbc.ClickHouseDriver"),
             clickhouse_user=_required("CLICKHOUSE_USER"),
             clickhouse_password=_required("CLICKHOUSE_PASSWORD"),

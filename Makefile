@@ -15,14 +15,16 @@ test-spark:  ## Spark unit tests inside the Spark image (JDK 17)
 sync-contracts:
 	python scripts/sync_contracts.py
 
-streaming:  ## start the three streaming jobs
+streaming:  ## start the four streaming jobs
 	scripts/spark.sh start raw_to_minio
 	scripts/spark.sh start market_to_clickhouse
+	scripts/spark.sh start news_to_clickhouse
 	scripts/spark.sh start volume_anomaly
 
 stop-streaming:
 	-scripts/spark.sh stop raw_to_minio
 	-scripts/spark.sh stop market_to_clickhouse
+	-scripts/spark.sh stop news_to_clickhouse
 	-scripts/spark.sh stop volume_anomaly
 
 ohlcv-5m:

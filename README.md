@@ -78,6 +78,7 @@ Code trong `spark_jobs/`, chạy trên cụm Spark của repo `infrastructure` (
 |---|---|---|---|
 | `raw_to_minio` | streaming | Kafka `market_data`, `news_data` | MinIO `raw-data/{market,news}/year=/month=/day=/` (JSON, kèm metadata Kafka + `ingested_at`) |
 | `market_to_clickhouse` | streaming | Kafka `market_data` | ClickHouse `market_data` (+ `processed_at`), bản ghi lỗi vào `market_data_rejects` |
+| `news_to_clickhouse` | streaming | Kafka `news_data` | ClickHouse `news_data` qua HTTP JSONEachRow (giữ được `symbols Array(String)`), bản ghi lỗi vào `news_data_rejects` |
 | `volume_anomaly` | streaming | Kafka `market_data` + 20 nến trước từ ClickHouse | ClickHouse `signals` |
 | `batch_ohlcv_5m` | batch | MinIO raw market theo khoảng ngày | ClickHouse `candles_5m` |
 | `batch_indicators` | batch | MinIO raw market theo khoảng ngày (+1 ngày trước) | ClickHouse `indicators` (`ma20`) |
@@ -92,12 +93,13 @@ spark_jobs/
 ### Thứ tự chạy
 
 1. Trong `infrastructure`: `docker compose up -d --build`, rồi `./scripts/migrate_clickhouse.ps1` nếu ClickHouse đã có dữ liệu từ trước.
-2. Collector gửi Kafka: `python -m collector --source all --send-kafka`.
+2. Collector gửi Kafka: `python -m collector --source all --send-kafka` hoặc để service `collector` trong Docker Compose chạy liên tục.
 3. Streaming (chạy nền, mỗi job một checkpoint riêng ở `s3a://checkpoints/<job>`):
 
    ```powershell
    .\scripts\spark.ps1 start raw_to_minio
    .\scripts\spark.ps1 start market_to_clickhouse
+   .\scripts\spark.ps1 start news_to_clickhouse
    .\scripts\spark.ps1 start volume_anomaly
    .\scripts\spark.ps1 logs market_to_clickhouse      # xem log
    .\scripts\spark.ps1 stop market_to_clickhouse      # dừng; start lại sẽ chạy tiếp từ checkpoint
@@ -109,6 +111,16 @@ spark_jobs/
    .\scripts\spark.ps1 run batch_ohlcv_5m --start 2026-10-27 --end 2026-10-28
    .\scripts\spark.ps1 run batch_indicators --start 2026-10-27 --end 2026-10-28
    ```
+
+Trên Windows có thể chạy toàn bộ quy trình bằng một lệnh. Script sẽ khởi động hạ tầng và
+Collector, start các job streaming, chờ có object trong MinIO, chạy hai batch job và in số
+dòng hiện có trong ClickHouse:
+
+```powershell
+.\scripts\run_pipeline.ps1 -Start 2026-10-27 -End 2026-10-28
+```
+
+Nếu vừa sửa Dockerfile hoặc cấu hình hạ tầng, thêm `-BuildInfrastructure`.
 
 Trên Linux/macOS dùng `scripts/spark.sh` (cùng tham số) hoặc `make streaming`, `make ohlcv-5m START=... END=...`. Lệnh bên dưới là `spark-submit` thật mà script chạy trong container `spark-master` (connector đã bake trong image, không cần `--packages`):
 
@@ -129,7 +141,7 @@ Kết nối Kafka/MinIO/ClickHouse do compose cấp cho container Spark (xem `in
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
 | `SPARK_STARTING_OFFSETS` | `earliest` | Offset Kafka khi job chạy **lần đầu** (chưa có checkpoint). Ghi đè riêng: `MARKET_TO_CLICKHOUSE_STARTING_OFFSETS`, ... |
-| `SPARK_TRIGGER_INTERVAL` | job tự chọn | `raw_to_minio` 1 phút (ít file nhỏ), `market_to_clickhouse` 10 giây, `volume_anomaly` 30 giây |
+| `SPARK_TRIGGER_INTERVAL` | job tự chọn | `raw_to_minio` 1 phút (ít file nhỏ), `market_to_clickhouse`/`news_to_clickhouse` 10 giây, `volume_anomaly` 30 giây |
 | `SPARK_MAX_OFFSETS_PER_TRIGGER` | không giới hạn | Giới hạn số message mỗi micro-batch khi đọc lại lịch sử |
 | `SPARK_FAIL_ON_DATA_LOSS` | `false` | Có dừng job khi offset trong checkpoint đã bị Kafka xóa không |
 | `ANOMALY_PERIODS`, `ANOMALY_STDDEV_K`, `ANOMALY_LOOKBACK_HOURS` | `20`, `3`, `24` | Quy tắc volume bất thường |

@@ -21,8 +21,11 @@ def _field_checks(name: str) -> list[Column]:
     for field, spec in contracts.properties(name).items():
         raw = F.get_json_object(value, f"$.{field}")
         parsed = F.col(f"{PARSED}.{field}")
-        if field in contracts.required_fields(name) and spec.get("type") != ["string", "null"]:
-            checks.append(F.when(raw.isNull(), F.lit(f"missing:{field}")))
+        if field in contracts.required_fields(name):
+            # Check key presence instead of raw == NULL so a required nullable field such as
+            # news.sentiment may legally be present with an explicit JSON null value.
+            present = F.array_contains(F.expr("json_object_keys(value)"), F.lit(field))
+            checks.append(F.when(~present, F.lit(f"missing:{field}")))
         # Present in the JSON but from_json could not read it as the contract type.
         checks.append(F.when(raw.isNotNull() & parsed.isNull(), F.lit(f"type:{field}")))
         if "const" in spec:
@@ -33,6 +36,18 @@ def _field_checks(name: str) -> list[Column]:
             checks.append(F.when(~parsed.rlike(spec["pattern"]), F.lit(f"pattern:{field}")))
         if spec.get("minLength"):
             checks.append(F.when(F.length(parsed) < spec["minLength"], F.lit(f"length:{field}")))
+        if spec.get("type") == "array":
+            item_spec = spec.get("items", {})
+            if item_spec.get("pattern"):
+                checks.append(F.when(
+                    F.exists(parsed, lambda item: ~item.rlike(item_spec["pattern"])),
+                    F.lit(f"pattern:{field}.items"),
+                ))
+            if spec.get("uniqueItems"):
+                checks.append(F.when(
+                    F.size(parsed) != F.size(F.array_distinct(parsed)),
+                    F.lit(f"unique:{field}"),
+                ))
         if spec.get("type") in ("number", "integer"):
             not_finite = F.isnan(parsed) | parsed.isin(math.inf, -math.inf)
             checks.append(F.when(not_finite, F.lit(f"not_finite:{field}")))
@@ -92,6 +107,16 @@ def validate_market(df: DataFrame) -> DataFrame:
     ]
     checked = _with_errors(df, "market_kline", rules)
     return checked.select(*[c for c in df.columns], *_typed_fields("market_kline"), "errors")
+
+
+def validate_news(df: DataFrame) -> DataFrame:
+    """Validate decoded Kafka rows against the news_article contract.
+
+    News has no additional cross-field business rule in v1; the shared checks cover required
+    fields, types, constants, patterns, array items and duplicate symbols.
+    """
+    checked = _with_errors(df, "news_article", [])
+    return checked.select(*[c for c in df.columns], *_typed_fields("news_article"), "errors")
 
 
 def is_valid() -> Column:
