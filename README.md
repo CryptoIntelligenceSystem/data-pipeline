@@ -78,7 +78,7 @@ Code trong `spark_jobs/`, chạy trên cụm Spark của repo `infrastructure` (
 |---|---|---|---|
 | `raw_to_minio` | streaming | Kafka `market_data`, `news_data` | MinIO `raw-data/{market,news}/year=/month=/day=/` (JSON, kèm metadata Kafka + `ingested_at`) |
 | `market_to_clickhouse` | streaming | Kafka `market_data` | ClickHouse `market_data` (+ `processed_at`), bản ghi lỗi vào `market_data_rejects` |
-| `news_to_clickhouse` | streaming | Kafka `news_data` | ClickHouse `news_data`, bản ghi lỗi vào `news_data_rejects` |
+| `news_to_clickhouse` | streaming | Kafka `news_data` | ClickHouse `news_data` qua HTTP JSONEachRow (giữ được `symbols Array(String)`), bản ghi lỗi vào `news_data_rejects` |
 | `volume_anomaly` | streaming | Kafka `market_data` + 20 nến trước từ ClickHouse | ClickHouse `signals` |
 | `batch_ohlcv_5m` | batch | MinIO raw market theo khoảng ngày | ClickHouse `candles_5m` |
 | `batch_indicators` | batch | MinIO raw market theo khoảng ngày (+1 ngày trước) | ClickHouse `indicators` (`ma20`) |

@@ -25,7 +25,7 @@ def process_batch(batch: DataFrame, batch_id: int, settings: Settings) -> None:
         valid, rejected = split_news(rows)
         articles = news_rows(valid).persist()
         rejects = news_reject_rows(rejected).persist()
-        clickhouse.write(articles, "news_data", settings)
+        clickhouse.write_json_each_row(articles, "news_data", settings)
         clickhouse.write(rejects, "news_data_rejects", settings)
         LOGGER.info("batch %d: %d articles, %d rejected", batch_id, articles.count(), rejects.count())
         articles.unpersist()
