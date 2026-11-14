@@ -66,6 +66,18 @@ def test_ma20_hand_calculated(spark):
     assert len(result) == 25
 
 
+def test_ma20_preserves_five_minute_interval(spark):
+    rows = [
+        ("BTCUSDT", minute, 1, 2, 1, minute + 1, 1)
+        for minute in range(0, 100, 5)
+    ]
+    result = moving_average(candles_df(spark, rows, interval="5m")).collect()
+
+    assert all(row["interval"] == "5m" for row in result)
+    assert result[18]["value"] is None
+    assert result[19]["value"] == 48.5
+
+
 def test_dedupe_keeps_latest_collected(spark):
     first = market_message(volume=1.0, collected_at="2026-10-27T08:01:00.000Z")
     later = market_message(volume=2.0, collected_at="2026-10-27T08:05:00.000Z")
