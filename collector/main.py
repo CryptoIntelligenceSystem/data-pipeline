@@ -7,7 +7,14 @@ from datetime import datetime
 from .collectors import BinanceCollector, CoinDeskCollector
 from .config import Settings
 from .kafka import publish
-from .output import validate_and_deduplicate, write_partitioned_jsonl
+from .output import (
+    clear_pending_records,
+    find_new_records,
+    read_pending_records,
+    validate_and_deduplicate,
+    write_partitioned_jsonl,
+    write_pending_records,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,14 +52,37 @@ def _in_range(value: str, start: str | None, end: str | None) -> bool:
 
 def _store(records: list[dict], data_type: str, topic: str, args: argparse.Namespace, settings: Settings) -> None:
     valid = validate_and_deduplicate(records, data_type)
-    written, skipped = write_partitioned_jsonl(valid, Path(settings.output_dir), data_type)
-    logging.info("%s records written: %d; duplicates skipped: %d", data_type.capitalize(), len(written), skipped)
     if args.send_kafka:
-        # Only records new to the local store are sent, so reruns do not replay old data into Kafka.
+        # Keep a durable outbox separate from the final partitioned files. This covers both a
+        # Kafka outage longer than the collector's API window and a process crash after Kafka
+        # acknowledged a record but before the final JSONL append completed.
+        base_dir = Path(settings.output_dir)
+        pending = validate_and_deduplicate(
+            read_pending_records(base_dir, data_type), data_type
+        )
+        candidates, skipped = find_new_records(
+            [*valid, *pending], base_dir, data_type
+        )
+        if not candidates:
+            clear_pending_records(base_dir, data_type)
+            logging.info("No new %s records to publish", data_type)
+            return
+        write_pending_records(candidates, base_dir, data_type)
         try:
-            publish(written, topic, settings.kafka_bootstrap_servers)
+            publish(candidates, topic, settings.kafka_bootstrap_servers)
         except RuntimeError as exc:
-            logging.error("Could not publish %s records to Kafka: %s", data_type, exc)
+            logging.error(
+                "Could not publish %s records to Kafka; keeping them pending for retry: %s",
+                data_type,
+                exc,
+            )
+            return
+        written, race_skipped = write_partitioned_jsonl(candidates, base_dir, data_type)
+        clear_pending_records(base_dir, data_type)
+        skipped += race_skipped
+    else:
+        written, skipped = write_partitioned_jsonl(valid, Path(settings.output_dir), data_type)
+    logging.info("%s records written: %d; duplicates skipped: %d", data_type.capitalize(), len(written), skipped)
 
 
 def collect_market(args: argparse.Namespace, settings: Settings) -> None:

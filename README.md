@@ -14,7 +14,7 @@ python -m collector --source all --once
 
 File được chia theo ngày, ví dụ `data/samples/market/2026/10/22.jsonl` và `data/samples/news/2026/10/22.jsonl`.
 
-Bỏ `--once` để collector chạy liên tục, mỗi `COLLECTOR_POLL_SECONDS` giây (mặc định 60) lấy một lượt; dừng bằng Ctrl+C.
+Bỏ `--once` để collector chạy liên tục, mỗi `COLLECTOR_POLL_SECONDS` giây (mặc định 15) lấy một lượt; dừng bằng Ctrl+C.
 
 ## Gửi Kafka
 
@@ -44,7 +44,7 @@ CoinDesk RSS chỉ chứa các bài mới nhất, nên `--start/--end` với ngu
 - `published_at` là thời gian bài viết; `collected_at` là thời gian collector lấy dữ liệu.
 - Tin tức được gắn `symbols` theo từ khóa trong tiêu đề/tóm tắt (ví dụ "bitcoin" → `BTCUSDT`); HTML trong tóm tắt được loại bỏ.
 - Các lần chạy sau append vào file ngày tương ứng và bỏ qua bản ghi đã tồn tại.
-- Với `--send-kafka`, chỉ bản ghi mới ghi vào file được gửi Kafka, nên chạy lại không gửi trùng.
+- Với `--send-kafka`, collector dùng `data/outbox/{market,news}.jsonl`: bản ghi chờ được ghi bền vững trước, gửi Kafka thành công rồi mới chuyển vào file ngày chính. Nếu Kafka lỗi hoặc collector dừng sau khi Kafka xác nhận, lượt sau vẫn gửi lại được; các bảng ClickHouse dùng khóa tự nhiên nên replay an toàn.
 
 ## Kiểm thử
 
@@ -81,12 +81,13 @@ Code trong `spark_jobs/`, chạy trên cụm Spark của repo `infrastructure` (
 | `news_to_clickhouse` | streaming | Kafka `news_data` | ClickHouse `news_data` qua HTTP JSONEachRow (giữ được `symbols Array(String)`), bản ghi lỗi vào `news_data_rejects` |
 | `volume_anomaly` | streaming | Kafka `market_data` + 20 nến trước từ ClickHouse | ClickHouse `signals` |
 | `batch_ohlcv_5m` | batch | MinIO raw market theo khoảng ngày | ClickHouse `candles_5m` |
-| `batch_indicators` | batch | MinIO raw market theo khoảng ngày (+1 ngày trước) | ClickHouse `indicators` (`ma20`) |
+| `batch_indicators` | batch | MinIO raw market 1m và `candles_5m` trong ClickHouse (+19 nến trước) | ClickHouse `indicators` (`ma20` cho cả `1m` và `5m`) |
+| `batch_news_impact` | batch | ClickHouse `news_data` và `market_data` 1m | ClickHouse `news_impact` (biến động giá sau tin ở mốc 5/15/60 phút) |
 
 ```
 spark_jobs/
   common/      config (env), session (UTC), contracts (schema từ JSON Schema), validate, kafka_io, clickhouse (JDBC), raw_zone
-  transforms.py  logic thuần (validate, dedupe, gộp 5 phút, MA20, volume bất thường, raw record) — được unit test
+  transforms.py  logic thuần (validate, dedupe, gộp 5 phút, MA20, News Impact, volume bất thường, raw record) — được unit test
   jobs/        mỗi job một entrypoint
 ```
 
@@ -110,17 +111,28 @@ spark_jobs/
    ```powershell
    .\scripts\spark.ps1 run batch_ohlcv_5m --start 2026-10-27 --end 2026-10-28
    .\scripts\spark.ps1 run batch_indicators --start 2026-10-27 --end 2026-10-28
+   .\scripts\spark.ps1 run batch_news_impact --start 2026-10-27 --end 2026-10-28
    ```
 
+   Chạy `batch_news_impact` sau khi `news_to_clickhouse` và `market_to_clickhouse` đã ghi dữ liệu
+   vào ClickHouse. Mỗi bài phải có ít nhất một `symbol` và nến 1 phút đã đóng quanh thời điểm
+   đăng tin. Giá gốc là nến cuối trước khi đăng tin (cách dưới 60 giây); giá ở mốc 5/15/60 phút
+   là nến đầu đóng sau mốc đó (trễ dưới 60 giây). Thiếu nến gần mốc nào thì không tạo hàng cho
+   mốc đó. `return_pct = (target_close / baseline_close - 1) × 100`. Đây là **biến động giá sau
+   tin theo thời gian**, không chứng minh tin là nguyên nhân làm giá thay đổi. Chạy lại batch khi
+   có tin mới; ngày UTC không có tin phù hợp sẽ cho 0 hàng.
+
 Trên Windows có thể chạy toàn bộ quy trình bằng một lệnh. Script sẽ khởi động hạ tầng và
-Collector, start các job streaming, chờ có object trong MinIO, chạy hai batch job và in số
-dòng hiện có trong ClickHouse:
+Collector, start bốn job streaming, backfill khoảng ngày yêu cầu vào Kafka, chờ đủ các partition
+raw trong MinIO, chạy ba batch job và in số dòng hiện có trong ClickHouse. Compose có worker
+Spark riêng cho batch nên batch không bị chờ vô hạn khi bốn job streaming đang chạy:
 
 ```powershell
 .\scripts\run_pipeline.ps1 -Start 2026-10-27 -End 2026-10-28
 ```
 
 Nếu vừa sửa Dockerfile hoặc cấu hình hạ tầng, thêm `-BuildInfrastructure`.
+Nếu dữ liệu lịch sử đã có sẵn trong MinIO, thêm `-SkipBackfill` để không gọi lại collector lịch sử.
 
 Trên Linux/macOS dùng `scripts/spark.sh` (cùng tham số) hoặc `make streaming`, `make ohlcv-5m START=... END=...`. Lệnh bên dưới là `spark-submit` thật mà script chạy trong container `spark-master` (connector đã bake trong image, không cần `--packages`):
 

@@ -138,8 +138,48 @@ def test_only_new_records_are_sent_to_kafka(monkeypatch, tmp_path):
 
     sent = []
     monkeypatch.setattr(main, "publish", lambda records, topic, servers: sent.append(list(records)))
-    settings = main.Settings(output_dir=str(tmp_path))
+    settings = main.Settings(output_dir=str(tmp_path / "samples"))
     args = argparse.Namespace(send_kafka=True)
     main._store([market()], "market", "market_data", args, settings)
     main._store([market()], "market", "market_data", args, settings)
-    assert [len(batch) for batch in sent] == [1, 0]
+    assert [len(batch) for batch in sent] == [1]
+
+
+def test_kafka_failure_does_not_mark_records_as_stored(monkeypatch, tmp_path):
+    from tests.test_validation import market
+
+    def fail_publish(*args, **kwargs):
+        raise RuntimeError("broker unavailable")
+
+    monkeypatch.setattr(main, "publish", fail_publish)
+    settings = main.Settings(output_dir=str(tmp_path / "samples"))
+    args = argparse.Namespace(send_kafka=True)
+
+    main._store([market()], "market", "market_data", args, settings)
+
+    path = tmp_path / "samples" / "market" / "2026" / "10" / "21.jsonl"
+    assert not path.exists()
+    pending_path = tmp_path / "outbox" / "market.jsonl"
+    assert pending_path.exists()
+
+
+def test_pending_records_are_retried_and_promoted(monkeypatch, tmp_path):
+    from tests.test_validation import market
+
+    attempts = []
+
+    def publish_once(records, topic, bootstrap_servers):
+        attempts.append(list(records))
+        if len(attempts) == 1:
+            raise RuntimeError("broker unavailable")
+
+    monkeypatch.setattr(main, "publish", publish_once)
+    settings = main.Settings(output_dir=str(tmp_path / "samples"))
+    args = argparse.Namespace(send_kafka=True)
+
+    main._store([market()], "market", "market_data", args, settings)
+    main._store([], "market", "market_data", args, settings)
+
+    assert len(attempts) == 2
+    assert (tmp_path / "samples" / "market" / "2026" / "10" / "21.jsonl").exists()
+    assert not (tmp_path / "outbox" / "market.jsonl").exists()

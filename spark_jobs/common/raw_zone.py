@@ -1,7 +1,7 @@
 """Reading the raw zone written by raw_to_minio (s3a://raw-data/<dataset>/year=/month=/day=)."""
 
 import argparse
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
@@ -36,7 +36,9 @@ def read_raw(spark: SparkSession, settings: Settings, dataset: str, start: date,
 def parse_date_range(description: str, argv: list[str] | None = None) -> tuple[date, date]:
     """--start/--end as YYYY-MM-DD, both inclusive. Default: yesterday only (UTC dates)."""
     parser = argparse.ArgumentParser(description=description)
-    yesterday = date.today() - timedelta(days=1)
+    # Contract timestamps and MinIO partitions are UTC; do not let the host timezone
+    # change the default range around midnight.
+    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
     parser.add_argument("--start", type=date.fromisoformat, default=yesterday)
     parser.add_argument("--end", type=date.fromisoformat, default=None)
     args = parser.parse_args(argv)

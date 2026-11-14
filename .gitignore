@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 data/samples/**
 !data/samples/.gitkeep
+data/e2e-test/
 spark-warehouse/
 metastore_db/
 derby.log

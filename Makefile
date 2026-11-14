@@ -4,7 +4,7 @@
 START ?= $(shell python -c "import datetime as d; print(d.date.today() - d.timedelta(days=1))")
 END ?= $(START)
 
-.PHONY: test test-spark sync-contracts streaming stop-streaming ohlcv-5m indicators
+.PHONY: test test-spark sync-contracts streaming stop-streaming ohlcv-5m indicators news-impact
 
 test:
 	python -m pytest -q
@@ -32,3 +32,6 @@ ohlcv-5m:
 
 indicators:
 	scripts/spark.sh run batch_indicators --start $(START) --end $(END)
+
+news-impact:
+	scripts/spark.sh run batch_news_impact --start $(START) --end $(END)
