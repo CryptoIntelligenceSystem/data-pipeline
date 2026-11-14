@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
@@ -48,7 +48,7 @@ def test_required_nullable_sentiment_may_be_null_but_must_be_present(spark):
 
 def test_clickhouse_json_transport_preserves_arrays_and_formats_timestamps(spark):
     frame = spark.createDataFrame(
-        [(datetime(2026, 10, 29, 12, 32, 0, 123000), ["BTCUSDT"], None)],
+        [(datetime(2026, 10, 29, 12, 32, 0, 123000, tzinfo=timezone.utc), ["BTCUSDT"], None)],
         T.StructType([
             T.StructField("published_at", T.TimestampType()),
             T.StructField("symbols", T.ArrayType(T.StringType())),
