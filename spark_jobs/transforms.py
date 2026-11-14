@@ -171,6 +171,64 @@ def moving_average(candles: DataFrame, periods: int = 20, column: str = "close")
     )
 
 
+# ---------------------------------------------------------------- batch: news impact
+
+def calculate_news_impact(articles: DataFrame, candles: DataFrame) -> DataFrame:
+    """Measure price movement after each article, without claiming the article caused it.
+
+    Articles have source/article_id/title/symbol/published_ms. Candles have
+    symbol/close_ms/close. For the baseline, use the last closed 1m candle before
+    publication (at most 60s old). For each 5/15/60 minute horizon, use the first
+    closed candle at or after that time (less than 60s late). Missing prices are
+    skipped rather than silently comparing with a stale candle.
+    """
+    event_key = ["source", "article_id", "symbol"]
+    articles = articles.dropDuplicates(event_key).where(F.col("symbol").isNotNull())
+    candles = candles.where(F.col("close") > 0)
+
+    before = articles.alias("a").join(
+        candles.alias("c"),
+        (F.col("a.symbol") == F.col("c.symbol"))
+        & (F.col("c.close_ms") < F.col("a.published_ms"))
+        & (F.col("c.close_ms") >= F.col("a.published_ms") - 60000),
+        "inner",
+    ).select(
+        *[F.col(f"a.{name}").alias(name) for name in [*event_key, "title", "published_ms"]],
+        F.col("c.close_ms").alias("baseline_ms"),
+        F.col("c.close").alias("baseline_close"),
+    )
+    baseline_rank = Window.partitionBy(*event_key).orderBy(F.col("baseline_ms").desc())
+    baseline = before.withColumn("_rn", F.row_number().over(baseline_rank)).where("_rn = 1").drop("_rn")
+
+    horizons = baseline.withColumn("horizon_minutes", F.explode(F.array(F.lit(5), F.lit(15), F.lit(60))))
+    after = horizons.alias("a").join(
+        candles.alias("c"),
+        (F.col("a.symbol") == F.col("c.symbol"))
+        & (F.col("c.close_ms") >= F.col("a.published_ms") + F.col("a.horizon_minutes") * 60000)
+        & (F.col("c.close_ms") < F.col("a.published_ms") + (F.col("a.horizon_minutes") + 1) * 60000),
+        "inner",
+    ).select(
+        *[F.col(f"a.{name}").alias(name) for name in [*event_key, "title", "published_ms", "baseline_ms", "baseline_close", "horizon_minutes"]],
+        F.col("c.close_ms").alias("target_ms"),
+        F.col("c.close").alias("target_close"),
+    )
+    target_rank = Window.partitionBy(*event_key, "horizon_minutes").orderBy(F.col("target_ms").asc())
+    matched = after.withColumn("_rn", F.row_number().over(target_rank)).where("_rn = 1").drop("_rn")
+
+    return matched.select(
+        *event_key,
+        "title",
+        F.timestamp_millis("published_ms").alias("published_at"),
+        "horizon_minutes",
+        F.timestamp_millis("baseline_ms").alias("baseline_time"),
+        "baseline_close",
+        F.timestamp_millis("target_ms").alias("target_time"),
+        "target_close",
+        ((F.col("target_close") / F.col("baseline_close") - 1) * 100).alias("return_pct"),
+        F.current_timestamp().alias("calculated_at"),
+    )
+
+
 # ---------------------------------------------------------------- volume anomaly
 
 def detect_volume_anomalies(history: DataFrame, current: DataFrame, periods: int = 20,

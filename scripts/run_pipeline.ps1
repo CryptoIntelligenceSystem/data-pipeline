@@ -4,15 +4,17 @@ Run the local pipeline end to end on Windows.
 Usage:
   .\scripts\run_pipeline.ps1 -Start 2026-10-29 -End 2026-10-30
   .\scripts\run_pipeline.ps1 -Start 2026-10-29 -End 2026-10-30 -BuildInfrastructure
+  .\scripts\run_pipeline.ps1 -Start 2026-10-29 -End 2026-10-30 -SkipBackfill
 
-The date range is the UTC range used by the batch jobs. Streaming jobs stay running after the
-batch jobs finish.
+The date range is inclusive and UTC. By default the script backfills that range through the
+collector before running the batch jobs. Streaming jobs stay running after the batch jobs finish.
 ###>
 param(
     [Parameter(Mandatory = $true)][string]$Start,
     [Parameter(Mandatory = $true)][string]$End,
     [switch]$BuildInfrastructure,
-    [ValidateRange(10, 1800)][int]$RawTimeoutSeconds = 120
+    [switch]$SkipBackfill,
+    [ValidateRange(30, 3600)][int]$RawTimeoutSeconds = 300
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,9 +41,22 @@ function Invoke-Compose {
     }
 }
 
-function Test-RawData {
-    $output = & docker compose -f $composeFile run --rm --no-deps -T mc-init ls --recursive local/raw-data 2>$null
-    return ($LASTEXITCODE -eq 0 -and @($output | Where-Object { $_ -match "\S" }).Count -gt 0)
+function Test-RawDataDateRange {
+    $current = [DateTime]::ParseExact($Start, "yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture)
+    $last = [DateTime]::ParseExact($End, "yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture)
+    while ($current -le $last) {
+        $path = "local/raw-data/market/year=$($current.Year)/month=$($current.Month)/day=$($current.Day)"
+        $output = & docker compose -f $composeFile run --rm --no-deps -T mc-init ls --recursive $path 2>$null
+        if ($LASTEXITCODE -ne 0 -or @($output | Where-Object { $_ -match "\S" }).Count -eq 0) {
+            return $false
+        }
+        $current = $current.AddDays(1)
+    }
+    return $true
+}
+
+function Get-UtcIso([DateTime]$value) {
+    return $value.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture)
 }
 
 function Wait-ClickHouse {
@@ -75,18 +90,30 @@ Invoke-Checked $sparkScript @("start", "market_to_clickhouse")
 Invoke-Checked $sparkScript @("start", "news_to_clickhouse")
 Invoke-Checked $sparkScript @("start", "volume_anomaly")
 
-Write-Host "Waiting for raw data to appear in MinIO (up to ${RawTimeoutSeconds}s)..." -ForegroundColor Cyan
+if (-not $SkipBackfill) {
+    $startDate = [DateTime]::ParseExact($Start, "yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture)
+    $endDateExclusive = [DateTime]::ParseExact($End, "yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture).AddDays(1)
+    $startIso = Get-UtcIso $startDate
+    $endIso = Get-UtcIso $endDateExclusive
+    Write-Host "Backfilling $startIso .. $endIso into Kafka..." -ForegroundColor Cyan
+    Invoke-Compose @(
+        "run", "--rm", "--no-deps", "-T", "collector", "python", "-m", "collector",
+        "--source", "all", "--start", $startIso, "--end", $endIso, "--send-kafka"
+    )
+}
+
+Write-Host "Waiting for all requested raw-data partitions in MinIO (up to ${RawTimeoutSeconds}s)..." -ForegroundColor Cyan
 $deadline = (Get-Date).AddSeconds($RawTimeoutSeconds)
 $rawReady = $false
 while ((Get-Date) -lt $deadline) {
-    if (Test-RawData) {
+    if (Test-RawDataDateRange) {
         $rawReady = $true
         break
     }
     Start-Sleep -Seconds 5
 }
 if (-not $rawReady) {
-    throw "No object found in MinIO raw-data before timeout. Check: .\scripts\spark.ps1 logs raw_to_minio"
+    throw "MinIO raw-data is missing one or more requested UTC date partitions before timeout. Check: .\scripts\spark.ps1 logs raw_to_minio"
 }
 
 Write-Host "Running 5-minute candle batch for $Start .. $End ..." -ForegroundColor Cyan
@@ -95,6 +122,9 @@ Invoke-Checked $sparkScript @("run", "batch_ohlcv_5m", "--start", $Start, "--end
 Write-Host "Running MA20 batch for $Start .. $End ..." -ForegroundColor Cyan
 Invoke-Checked $sparkScript @("run", "batch_indicators", "--start", $Start, "--end", $End)
 
+Write-Host "Measuring News Impact for $Start .. $End ..." -ForegroundColor Cyan
+Invoke-Checked $sparkScript @("run", "batch_news_impact", "--start", $Start, "--end", $End)
+
 Write-Host "Pipeline verification:" -ForegroundColor Green
 $query = @"
 SELECT 'market_data' AS table_name, count() AS rows FROM pipeline.market_data FINAL
@@ -102,6 +132,7 @@ UNION ALL SELECT 'news_data', count() FROM pipeline.news_data FINAL
 UNION ALL SELECT 'candles_5m', count() FROM pipeline.candles_5m FINAL
 UNION ALL SELECT 'indicators', count() FROM pipeline.indicators FINAL
 UNION ALL SELECT 'signals', count() FROM pipeline.signals FINAL
+UNION ALL SELECT 'news_impact', count() FROM pipeline.news_impact FINAL
 "@
 Invoke-Compose @("exec", "-T", "clickhouse", "clickhouse-client", "--query", $query)
 
